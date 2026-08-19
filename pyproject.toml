@@ -1,0 +1,13 @@
+[project]
+name = "apify-instagram-workshop"
+version = "0.1.0"
+description = "Collect and analyze public Instagram Reels for the workshop."
+requires-python = ">=3.11"
+dependencies = [
+    "instaloader==4.15.3",
+    "openai==3.3.0",
+    "python-dotenv==1.2.3",
+]
+
+[tool.uv]
+package = false
