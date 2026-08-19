@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -215,6 +216,16 @@ def create_loader() -> instaloader.Instaloader:
         quiet=True,
         max_connection_attempts=3,
     )
+
+
+def preflight() -> None:
+    missing = [
+        command for command in ("ffmpeg", "ffprobe") if shutil.which(command) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            f"missing required executable(s): {', '.join(missing)}; install ffmpeg before collection"
+        )
 
 
 def scan_paths(username: str, run_id: str) -> tuple[Path, Path]:
@@ -660,6 +671,29 @@ def initialize_transcriptions(
             raise ValueError("transcription checkpoint does not match the profile scan")
         if payload.get("model") != MODEL:
             raise ValueError("transcription checkpoint uses a different model")
+        existing_shortcodes = {item["shortcode"] for item in payload["items"]}
+        for item in scan["reels"]:
+            if int(item["rank"]) > top or item["shortcode"] in existing_shortcodes:
+                continue
+            payload["items"].append(
+                {
+                    "rank": item["rank"],
+                    "shortcode": item["shortcode"],
+                    "source_url": item["source_url"],
+                    "status": "pending",
+                    "transcript": None,
+                    "detected_languages": [],
+                    "request": None,
+                    "response": None,
+                    "audio": None,
+                    "openai_derivative": None,
+                    "error": None,
+                    "transcribed_at": None,
+                }
+            )
+        payload["items"].sort(key=lambda item: int(item["rank"]))
+        payload["updated_at"] = utc_now()
+        atomic_write_json(checkpoint_path, payload)
         return payload
 
     ranked = [item for item in scan["reels"] if int(item["rank"]) <= top]
@@ -916,6 +950,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         metavar="RUN_ID",
         help="resume a previous run ID, for example 20260819T120000Z",
     )
+    parser.add_argument(
+        "--confirm-owned-profile",
+        action="store_true",
+        help="confirm that the profile is owned or controlled by you before retaining its audio",
+    )
     return parser.parse_args(argv)
 
 
@@ -924,12 +963,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.transcribe_limit > args.top:
         print("--transcribe-limit cannot exceed --top", file=sys.stderr)
         return 2
+    if args.transcribe_limit > 0 and not args.confirm_owned_profile:
+        print(
+            "--confirm-owned-profile is required before retaining Reel audio",
+            file=sys.stderr,
+        )
+        return 2
 
     load_dotenv(PROJECT_ROOT / ".env")
     run_id = args.resume or new_run_id()
     print(f"run_id={run_id}")
     print(f"collector={COLLECTOR_ID}")
     try:
+        preflight()
         scan = collect_profile(args.username, run_id, args.top)
         print(
             f"scan_complete posts={scan['posts_scanned']} reels={scan['reels_found']} "

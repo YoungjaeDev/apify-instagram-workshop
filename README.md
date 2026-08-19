@@ -77,24 +77,34 @@ cp .env.example .env
 
 ## 댓글 Top Reel 음성 보관과 전사
 
-공개 프로필의 게시물을 끝까지 조회하고 Reel만 댓글 수로 정렬한 뒤, 상위 항목의 음성을 M4A로 보관하고 한국어로 전사합니다. 실제 댓글 본문은 수집하지 않습니다.
+본인이 소유하거나 관리하는 공개 프로필의 게시물을 끝까지 조회하고 Reel만 댓글 수로 정렬한 뒤, 상위 항목의 음성을 M4A로 보관하고 한국어로 전사합니다. 실제 댓글 본문은 수집하지 않습니다. 다른 사람의 프로필에는 이 기능을 사용하지 않습니다.
+
+먼저 `ffmpeg`와 `ffprobe`를 설치합니다. macOS에서는 다음 명령을 사용할 수 있습니다.
+
+```bash
+brew install ffmpeg
+```
+
+첫 실행은 결과 10개로 제한하고 Top 5의 음성과 전사를 확인합니다.
 
 ```bash
 uv sync
 uv run python scripts/transcribe_top_reels.py \
   --username hehe_home_tem \
-  --top 100 \
-  --transcribe-limit 5
+  --top 10 \
+  --transcribe-limit 5 \
+  --confirm-owned-profile
 ```
 
-명령이 출력한 `run_id`와 Top 5 결과를 확인한 뒤 같은 실행을 Top 100까지 재개합니다.
+명령이 출력한 `run_id`와 Top 5 결과를 확인한 뒤 같은 전체 조회 결과를 Top 100까지 확장합니다.
 
 ```bash
 uv run python scripts/transcribe_top_reels.py \
   --username hehe_home_tem \
   --top 100 \
   --transcribe-limit 100 \
-  --resume <RUN_ID>
+  --resume <RUN_ID> \
+  --confirm-owned-profile
 ```
 
 - 음성: `data/raw/audio/<USERNAME>/<SHORTCODE>.m4a`

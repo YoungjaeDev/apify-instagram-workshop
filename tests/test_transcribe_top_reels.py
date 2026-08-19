@@ -209,6 +209,47 @@ class TopReelsTests(unittest.TestCase):
             self.assertFalse(transcriptions.arguments["stream"])
             self.assertEqual(transcriptions.arguments["prompt"], "한국어 릴스")
 
+    def test_preflight_fails_before_collection_when_ffmpeg_is_missing(self):
+        with (
+            patch.object(target.shutil, "which", return_value=None),
+            self.assertRaisesRegex(RuntimeError, "ffmpeg, ffprobe"),
+        ):
+            target.preflight()
+
+    def test_initialize_transcriptions_expands_checkpoint_for_top_100_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "transcriptions.checkpoint.json"
+            scan = {
+                "username": "user",
+                "run_id": "run",
+                "reels": [
+                    reel("AAA", 30, "2026-08-19T00:00:00Z", rank=1),
+                    reel("BBB", 20, "2026-08-18T00:00:00Z", rank=2),
+                ],
+            }
+            initial = target.initialize_transcriptions(
+                scan, top=1, checkpoint_path=checkpoint
+            )
+            initial["items"][0]["status"] = "success"
+            initial["items"][0]["transcript"] = "기존 전사"
+            target.atomic_write_json(checkpoint, initial)
+
+            expanded = target.initialize_transcriptions(
+                scan, top=2, checkpoint_path=checkpoint
+            )
+
+            self.assertEqual(len(expanded["items"]), 2)
+            self.assertEqual(expanded["items"][0]["status"], "success")
+            self.assertEqual(expanded["items"][0]["transcript"], "기존 전사")
+            self.assertEqual(expanded["items"][1]["status"], "pending")
+
+    def test_main_requires_owned_profile_confirmation_before_audio(self):
+        exit_code = target.main(
+            ["--username", "hehe_home_tem", "--top", "10", "--transcribe-limit", "5"]
+        )
+
+        self.assertEqual(exit_code, 2)
+
     def test_write_processed_csv_includes_pending_rows_and_audio_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "top.csv"
