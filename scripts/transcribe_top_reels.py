@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import json
 import os
@@ -13,11 +14,13 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import instaloader
 from dotenv import load_dotenv
@@ -32,6 +35,7 @@ AUDIO_ROOT = RAW_ROOT / "audio"
 MODEL = "gpt-transcribe"
 LANGUAGES = ["ko"]
 MAX_OPENAI_FILE_BYTES = 25_000_000
+CHECKPOINT_EVERY = 25
 COLLECTOR_ID = f"instaloader/instaloader@{version('instaloader')}"
 PROMPT_PREFIX = (
     "한국어 인스타그램 릴스 음성입니다. 주제는 집꾸미기, 인테리어, 살림, "
@@ -80,7 +84,20 @@ def utc_now() -> str:
 
 
 def new_run_id() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{timestamp}-{uuid4().hex[:8]}"
+
+
+@contextmanager
+def run_lock(username: str, run_id: str) -> Iterator[None]:
+    path = RAW_ROOT / f".{username}-{run_id}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(f"run is already active: {run_id}") from error
+        yield
 
 
 def validate_username(username: str) -> str:
@@ -247,6 +264,10 @@ def collect_profile(
             raise ValueError("saved scan does not match username and run ID")
         if not payload.get("scan_complete") or not payload.get("ranking_complete"):
             raise CollectionIncompleteError("saved profile scan is incomplete")
+        if len(payload.get("reels", [])) < top:
+            raise CollectionIncompleteError(
+                f"saved scan has only {len(payload.get('reels', []))} rankable Reels; requested Top {top}"
+            )
         return payload
 
     checkpoint = load_json(checkpoint_path) if checkpoint_path.exists() else None
@@ -280,51 +301,45 @@ def collect_profile(
         }
     )
 
+    def write_checkpoint() -> None:
+        atomic_write_json(
+            checkpoint_path,
+            {
+                "schema_version": 1,
+                "username": username,
+                "run_id": run_id,
+                "collection_started_at": started_at,
+                "profile_snapshot": profile_snapshot,
+                "posts_scanned": posts_scanned,
+                "last_shortcode": last_shortcode,
+                "reels": list(collected_reels.values()),
+                "scan_complete": False,
+            },
+        )
+
     iterator = profile.get_posts()
     try:
         for post in iterator:
             if seeking_resume_point:
                 if post.shortcode == last_shortcode:
                     seeking_resume_point = False
-                continue
+                    continue
+                if post.shortcode in collected_reels:
+                    continue
 
             item_collected_at = utc_now()
             normalized = normalize_post(post, item_collected_at)
             posts_scanned += 1
             if normalized is not None:
                 collected_reels[normalized["shortcode"]] = normalized
-            last_shortcode = post.shortcode
+            if not seeking_resume_point:
+                last_shortcode = post.shortcode
 
-            atomic_write_json(
-                checkpoint_path,
-                {
-                    "schema_version": 1,
-                    "username": username,
-                    "run_id": run_id,
-                    "collection_started_at": started_at,
-                    "profile_snapshot": profile_snapshot,
-                    "posts_scanned": posts_scanned,
-                    "last_shortcode": last_shortcode,
-                    "reels": list(collected_reels.values()),
-                    "scan_complete": False,
-                },
-            )
+            if posts_scanned % CHECKPOINT_EVERY == 0:
+                write_checkpoint()
+        write_checkpoint()
     except Exception:
-        if not checkpoint_path.exists():
-            atomic_write_json(
-                checkpoint_path,
-                {
-                    "schema_version": 1,
-                    "username": username,
-                    "run_id": run_id,
-                    "collection_started_at": started_at,
-                    "profile_snapshot": profile_snapshot,
-                    "posts_scanned": posts_scanned,
-                    "last_shortcode": last_shortcode,
-                    "reels": list(collected_reels.values()),
-                    "scan_complete": False,
-                },
-            )
+        write_checkpoint()
         raise
 
     if seeking_resume_point:
@@ -943,7 +958,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Rank public Instagram Reels by comments, retain audio, and transcribe Korean speech."
     )
     parser.add_argument("--username", required=True, type=validate_username)
-    parser.add_argument("--top", type=positive_int, default=100)
+    parser.add_argument("--top", type=positive_int, default=10)
     parser.add_argument("--transcribe-limit", type=nonnegative_int, default=5)
     parser.add_argument(
         "--resume",
@@ -975,17 +990,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"run_id={run_id}")
     print(f"collector={COLLECTOR_ID}")
     try:
-        preflight()
-        scan = collect_profile(args.username, run_id, args.top)
-        print(
-            f"scan_complete posts={scan['posts_scanned']} reels={scan['reels_found']} "
-            f"top={args.top}"
-        )
-        transcription, snapshot_path, csv_path = process_transcriptions(
-            scan,
-            args.top,
-            args.transcribe_limit,
-        )
+        with run_lock(args.username, run_id):
+            if args.transcribe_limit > 0:
+                preflight()
+            scan = collect_profile(args.username, run_id, args.top)
+            print(
+                f"scan_complete posts={scan['posts_scanned']} reels={scan['reels_found']} "
+                f"top={args.top}"
+            )
+            transcription, snapshot_path, csv_path = process_transcriptions(
+                scan,
+                args.top,
+                args.transcribe_limit,
+            )
     except Exception as error:  # noqa: BLE001 - convert the CLI boundary to an exit code.
         print(f"error: {sanitize_error(error)}", file=sys.stderr)
         return 1

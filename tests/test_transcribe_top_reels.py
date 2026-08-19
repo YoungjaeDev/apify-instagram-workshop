@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,7 +138,12 @@ class TopReelsTests(unittest.TestCase):
                 },
             )
             profile = FakeProfile(
-                [FakePost("AAA", 30), FakePost("BBB", 20), FakePost("CCC", 10)]
+                [
+                    FakePost("NEW", 40),
+                    FakePost("AAA", 30),
+                    FakePost("BBB", 20),
+                    FakePost("CCC", 10),
+                ]
             )
             loader = SimpleNamespace(context=object())
 
@@ -149,15 +155,84 @@ class TopReelsTests(unittest.TestCase):
                     return_value=profile,
                 ),
             ):
-                result = target.collect_profile("user", "run", top=3, loader=loader)
+                result = target.collect_profile("user", "run", top=4, loader=loader)
 
             self.assertTrue(result["scan_complete"])
-            self.assertEqual(result["posts_scanned"], 3)
+            self.assertEqual(result["posts_scanned"], 4)
             self.assertEqual(
-                [item["shortcode"] for item in result["reels"]], ["AAA", "BBB", "CCC"]
+                [item["shortcode"] for item in result["reels"]],
+                ["NEW", "AAA", "BBB", "CCC"],
             )
             self.assertFalse(checkpoint_path.exists())
             self.assertNotIn("cdn.example", json.dumps(result))
+
+    def test_collect_profile_rejects_cached_scan_smaller_than_requested_top(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            raw_root = Path(temporary)
+            final_path = raw_root / "user-reels-run.json"
+            target.atomic_write_json(
+                final_path,
+                {
+                    "username": "user",
+                    "run_id": "run",
+                    "scan_complete": True,
+                    "ranking_complete": True,
+                    "reels": [reel("AAA", 30, "2026-08-19T00:00:00Z", rank=1)],
+                },
+            )
+
+            with (
+                patch.object(target, "RAW_ROOT", raw_root),
+                self.assertRaisesRegex(
+                    target.CollectionIncompleteError, "requested Top 2"
+                ),
+            ):
+                target.collect_profile("user", "run", top=2)
+
+    def test_collect_profile_flushes_checkpoint_at_intervals_and_completion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            raw_root = Path(temporary)
+            profile = FakeProfile(
+                [FakePost(f"POST{index}", index) for index in range(51)]
+            )
+            loader = SimpleNamespace(context=object())
+
+            with (
+                patch.object(target, "RAW_ROOT", raw_root),
+                patch.object(
+                    target.instaloader.Profile,
+                    "from_username",
+                    return_value=profile,
+                ),
+                patch.object(
+                    target, "atomic_write_json", wraps=target.atomic_write_json
+                ) as write,
+            ):
+                target.collect_profile("user", "run", top=1, loader=loader)
+
+            checkpoint_path = raw_root / "user-reels-run.checkpoint.json"
+            checkpoint_writes = [
+                call for call in write.call_args_list if call.args[0] == checkpoint_path
+            ]
+            self.assertEqual(len(checkpoint_writes), 3)
+
+    def test_new_run_id_adds_collision_resistant_suffix(self):
+        with patch.object(
+            target, "uuid4", return_value=SimpleNamespace(hex="abcdef1234567890")
+        ):
+            run_id = target.new_run_id()
+
+        self.assertRegex(run_id, r"^\d{8}T\d{6}Z-abcdef12$")
+
+    def test_run_lock_rejects_concurrent_use_of_same_run(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(target, "RAW_ROOT", Path(temporary)),
+            target.run_lock("user", "run"),
+            self.assertRaisesRegex(RuntimeError, "already active"),
+            target.run_lock("user", "run"),
+        ):
+            self.fail("concurrent run lock should not be acquired")
 
     def test_build_prompt_normalizes_and_limits_caption(self):
         caption = "  집꾸미기\n<브랜드>  " + ("가" * 900)
@@ -249,6 +324,40 @@ class TopReelsTests(unittest.TestCase):
         )
 
         self.assertEqual(exit_code, 2)
+
+    def test_parse_args_defaults_first_run_to_top_ten(self):
+        args = target.parse_args(["--username", "hehe_home_tem"])
+
+        self.assertEqual(args.top, 10)
+
+    def test_main_skips_media_preflight_for_collection_only_run(self):
+        scan = {
+            "username": "user",
+            "run_id": "run",
+            "posts_scanned": 1,
+            "reels_found": 1,
+        }
+        transcription = {"items": []}
+        snapshot_path = target.PROJECT_ROOT / "data/raw/result.json"
+        csv_path = target.PROJECT_ROOT / "data/processed/result.csv"
+
+        with (
+            patch.object(target, "new_run_id", return_value="run"),
+            patch.object(target, "run_lock", return_value=nullcontext()),
+            patch.object(target, "preflight") as preflight,
+            patch.object(target, "collect_profile", return_value=scan),
+            patch.object(
+                target,
+                "process_transcriptions",
+                return_value=(transcription, snapshot_path, csv_path),
+            ),
+        ):
+            exit_code = target.main(
+                ["--username", "user", "--top", "1", "--transcribe-limit", "0"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        preflight.assert_not_called()
 
     def test_write_processed_csv_includes_pending_rows_and_audio_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
