@@ -75,6 +75,34 @@ CLI, SDK, CI처럼 브라우저 OAuth를 사용할 수 없는 환경에서만 �
 cp .env.example .env
 ```
 
+## 댓글 Top Reel 음성 보관과 전사
+
+공개 프로필의 게시물을 끝까지 조회하고 Reel만 댓글 수로 정렬한 뒤, 상위 항목의 음성을 M4A로 보관하고 한국어로 전사합니다. 실제 댓글 본문은 수집하지 않습니다.
+
+```bash
+uv sync
+uv run python scripts/transcribe_top_reels.py \
+  --username hehe_home_tem \
+  --top 100 \
+  --transcribe-limit 5
+```
+
+명령이 출력한 `run_id`와 Top 5 결과를 확인한 뒤 같은 실행을 Top 100까지 재개합니다.
+
+```bash
+uv run python scripts/transcribe_top_reels.py \
+  --username hehe_home_tem \
+  --top 100 \
+  --transcribe-limit 100 \
+  --resume <RUN_ID>
+```
+
+- 음성: `data/raw/audio/<USERNAME>/<SHORTCODE>.m4a`
+- 수집·전사 원본: `data/raw/`
+- 통합 CSV: `data/processed/`
+
+기존 음성과 성공한 전사는 재사용합니다. 영상 파일과 만료되는 Instagram CDN URL은 저장하지 않으며 `OPENAI_API_KEY`는 `.env`에서만 읽습니다.
+
 ### Codex를 사용하는 경우
 
 Apify CLI로 로그인한 뒤 공식 MCP를 Codex에 설치합니다.
