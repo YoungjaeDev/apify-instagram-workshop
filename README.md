@@ -31,6 +31,38 @@ Apify에서 apify/instagram-reel-scraper의 현재 입력 스키마와 가격 �
 
 Actor를 처음 실행할 때 브라우저가 열리면 Apify에 로그인하고 OAuth 권한을 승인합니다.
 
+### 프로젝트 MCP 준비
+
+이 저장소는 Apify 문서 검색용 `mcpdoc`과 공개 GitHub 저장소 탐색용 DeepWiki를 함께 설정합니다.
+
+```bash
+bash scripts/setup-mcp.sh
+```
+
+스크립트는 기존 `uvx`를 우선 사용합니다. 없으면 macOS의 Homebrew, 그다음 uv 공식 설치 프로그램 순서로 설치합니다. Windows에서는 다음 명령을 별도로 실행합니다.
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Claude Code는 저장소 루트의 `.mcp.json`을 사용합니다. 프로젝트를 신뢰한 뒤 Claude Code를 다시 시작하고 `/mcp`에서 `apify-docs`와 `deepwiki`를 확인합니다.
+
+Codex는 `.mcp.json`을 읽지 않습니다. 이 저장소에는 같은 서버를 `.codex/config.toml`에도 등록했습니다. 저장소를 신뢰한 뒤 Codex를 다시 시작하고 다음 명령으로 확인합니다.
+
+```bash
+codex mcp list
+```
+
+| 필요 작업 | 사용할 연결 |
+|---|---|
+| Actor 검색, 스키마 확인, 실행 | Apify 공식 플러그인 또는 MCP |
+| Apify 제품 문서와 API 문서 확인 | `apify-docs` |
+| 공개 GitHub 저장소 구조와 구현 질문 | `deepwiki` |
+
+`mcpdoc`의 허용 도메인은 Apify 제품 문서 도메인으로 제한했습니다. GitHub 저장소는 DeepWiki로 확인합니다.
+
+현재 설정은 검증된 `mcpdoc 0.0.10`과 `mcp<2` 조합을 고정합니다. 버전을 바꿀 때는 `python3 -m unittest tests/test-mcp-config.py -v`로 두 설정을 다시 확인합니다.
+
 ### API 토큰이 필요한 경우
 
 CLI, SDK, CI처럼 브라우저 OAuth를 사용할 수 없는 환경에서만 필요합니다.
@@ -86,8 +118,14 @@ Actor의 입력 스키마와 가격은 변경될 수 있습니다. 실행할 때
 
 ```text
 .
+├── .codex/config.toml
+├── .mcp.json
 ├── AGENTS.md
 ├── CLAUDE.md
+├── scripts/setup-mcp.sh
+├── tests/
+│   ├── test-mcp-config.py
+│   └── test-setup-mcp.sh
 ├── prompts/
 │   ├── 01-channel-dna.md
 │   ├── 02-viral-radar.md
@@ -112,5 +150,10 @@ Actor의 입력 스키마와 가격은 변경될 수 있습니다. 실행할 때
 - [Apify MCP](https://docs.apify.com/integrations/mcp)
 - [Apify Claude Code Plugin](https://github.com/apify/apify-claude-code-plugin)
 - [Apify Agent Skills](https://github.com/apify/agent-skills)
+- [Apify llms.txt](https://apify.com/llms.txt)
+- [mcpdoc](https://github.com/langchain-ai/mcpdoc)
+- [DeepWiki MCP](https://docs.devin.ai/work-with-devin/deepwiki-mcp)
+- [uv 설치](https://docs.astral.sh/uv/getting-started/installation/)
+- [Codex MCP 설정](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 - [Claude Code의 AGENTS.md 연동](https://code.claude.com/docs/en/memory#agents-md)
 - [Codex의 AGENTS.md 탐색 규칙](https://learn.chatgpt.com/docs/agent-configuration/agents-md)

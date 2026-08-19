@@ -1,0 +1,22 @@
+[mcp_servers.apify_docs]
+command = "uvx"
+args = [
+  "--from",
+  "mcpdoc==0.0.10",
+  "--with",
+  "mcp<2",
+  "mcpdoc",
+  "--urls",
+  "Apify:https://apify.com/llms.txt",
+  "--allowed-domains",
+  "https://docs.apify.com/",
+  "https://mcp.apify.com/",
+  "https://api.apify.com/",
+  "https://agi.apify.com/",
+  "--transport",
+  "stdio",
+]
+startup_timeout_sec = 30
+
+[mcp_servers.deepwiki]
+url = "https://mcp.deepwiki.com/mcp"
